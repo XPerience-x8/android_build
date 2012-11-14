@@ -35,8 +35,13 @@ define check-product-copy-files
 $(if $(filter %.apk, $(1)),$(error \
     Prebuilt apk found in PRODUCT_COPY_FILES: $(1), use BUILD_PREBUILT instead!))
 endef
-unique_product_copy_files_destinations :=
+# filter out the duplicate <source file>:<dest file> pairs.
+unique_product_copy_files_pairs :=
 $(foreach cf,$(PRODUCT_COPY_FILES), \
+    $(if $(filter $(unique_product_copy_files_pairs),$(cf)),,\
+        $(eval unique_product_copy_files_pairs += $(cf))))
+unique_product_copy_files_destinations :=
+$(foreach cf,$(unique_product_copy_files_pairs), \
     $(eval _src := $(call word-colon,1,$(cf))) \
     $(eval _dest := $(call word-colon,2,$(cf))) \
     $(if $(filter $(unique_product_copy_files_destinations),$(_dest)), \
@@ -47,6 +52,7 @@ $(foreach cf,$(PRODUCT_COPY_FILES), \
             $(eval $(call copy-one-file,$(_src),$(_fulldest)))) \
         $(eval ALL_DEFAULT_INSTALLED_MODULES += $(_fulldest)) \
         $(eval unique_product_copy_files_destinations += $(_dest))))
+unique_product_copy_files_pairs :=
 unique_product_copy_files_destinations :=
 
 # -----------------------------------------------------------------
@@ -245,13 +251,14 @@ $(PACKAGE_STATS_FILE): $(PACKAGES_TO_STAT)
 .PHONY: package-stats
 package-stats: $(PACKAGE_STATS_FILE)
 
-# makefile workaround to allow the insert of a newline
-define \n
-
-
-endef
 # -----------------------------------------------------------------
 # Cert-to-package mapping.  Used by the post-build signing tools.
+# Use a macro to add newline to each echo command
+define _apkcerts_echo_with_newline
+$(hide) echo $(1)
+
+endef
+
 name := $(TARGET_PRODUCT)
 ifeq ($(TARGET_BUILD_TYPE),debug)
   name := $(name)_debug
@@ -266,13 +273,15 @@ $(APKCERTS_FILE):
 	@echo APK certs list: $@
 	@mkdir -p $(dir $@)
 	@rm -f $@
-	$(hide) $(foreach p,$(PACKAGES),\
-          $(if $(PACKAGES.$(p).EXTERNAL_KEY),\
-	    echo 'name="$(p).apk" certificate="EXTERNAL" \
-	         private_key=""' >> $@;${\n},\
-	    echo 'name="$(p).apk" certificate="$(PACKAGES.$(p).CERTIFICATE)" \
-	         private_key="$(PACKAGES.$(p).PRIVATE_KEY)"' >> $@;${\n}))
-	# In case $(PACKAGES) is empty.
+	$(foreach p,$(PACKAGES),\
+	  $(if $(PACKAGES.$(p).EXTERNAL_KEY),\
+	    $(call _apkcerts_echo_with_newline,\
+	      'name="$(p).apk" certificate="EXTERNAL" \
+	      private_key=""' >> $@),\
+	    $(call _apkcerts_echo_with_newline,\
+	      'name="$(p).apk" certificate="$(PACKAGES.$(p).CERTIFICATE)" \
+	      private_key="$(PACKAGES.$(p).PRIVATE_KEY)"' >> $@)))
+	# In case value of PACKAGES is empty.
 	$(hide) touch $@
 
 .PHONY: apkcerts-list
@@ -1097,6 +1106,12 @@ OTATOOLS := $(DISTTOOLS) \
 .PHONY: otatools
 otatools: $(OTATOOLS)
 
+
+UNPACKBOOTIMG :=  $(HOST_OUT_EXECUTABLES)/unpackbootimg
+
+.PHONY: unpackbootimg
+otatools: $(UNPACKBOOTIMG)
+
 # -----------------------------------------------------------------
 # A zip of the directories that map to the target filesystem.
 # This zip can be used to create an OTA package or filesystem image
@@ -1596,6 +1611,7 @@ $(INTERNAL_SDK_TARGET): $(deps)
 		$(HOST_OUT_EXECUTABLES)/atree \
 		$(addprefix -f ,$(PRIVATE_INPUT_FILES)) \
 			-m $(PRIVATE_DEP_FILE) \
+			-I / \
 			-I . \
 			-I $(PRODUCT_OUT) \
 			-I $(HOST_OUT) \

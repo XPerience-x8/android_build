@@ -19,6 +19,8 @@ Invoke ". build/envsetup.sh" from your shell to add the following functions to y
 - mkap:     Builds the module(s) using mka and pushes them to the device.
 - cmka:     Cleans and builds using mka.
 - reposync: Parallel repo sync using ionice and SCHED_BATCH.
+- installboot: Installs a boot.img to the connected device.
+- installrecovery: Installs a recovery.img to the connected device.
 
 Look at the source to view more functions. The complete list is:
 EOF
@@ -689,6 +691,12 @@ EOF
     return $?
 }
 
+function omnom
+{
+    brunch $*
+    eat
+}
+
 function gettop
 {
     local TOPFILE=build/core/envsetup.mk
@@ -1159,7 +1167,7 @@ function smoketest()
         return
     fi
 
-    (cd "$T" && mmm tests/SmokeTest) &&
+    (cd "$T" && make SmokeTest SmokeTestApp) &&
       adb uninstall com.android.smoketest > /dev/null &&
       adb uninstall com.android.smoketest.tests > /dev/null &&
       adb install $ANDROID_PRODUCT_OUT/data/app/SmokeTestApp.apk &&
@@ -1306,6 +1314,39 @@ function installboot()
     fi
 }
 
+function installrecovery()
+{
+    if [ ! -e "$OUT/recovery/root/etc/recovery.fstab" ];
+    then
+        echo "No recovery.fstab found. Build recovery first."
+        return 1
+    fi
+    if [ ! -e "$OUT/recovery.img" ];
+    then
+        echo "No recovery.img found. Run make recoveryimage first."
+        return 1
+    fi
+    PARTITION=`grep "^\/recovery" $OUT/recovery/root/etc/recovery.fstab | awk {'print $3'}`
+    if [ -z "$PARTITION" ];
+    then
+        echo "Unable to determine recovery partition."
+        return 1
+    fi
+    adb start-server
+    adb root
+    sleep 1
+    adb wait-for-device
+    adb remount
+    adb wait-for-device
+    if (adb shell cat /system/build.prop | grep -q "ro.cm.device=$CM_BUILD");
+    then
+        adb push $OUT/recovery.img /cache/
+        adb shell dd if=/cache/recovery.img of=$PARTITION
+        echo "Installation complete."
+    else
+        echo "The connected device does not appear to be $CM_BUILD, run away!"
+    fi
+}
 
 function makerecipe() {
   if [ -z "$1" ]
@@ -1667,9 +1708,6 @@ function dopush()
     local func=$1
     shift
 
-    # Get product name from cm_<product>
-    PRODUCT=`echo $TARGET_PRODUCT | tr "_" "\n" | tail -n 1`
-
     adb start-server # Prevent unexpected starting server message from adb get-state in the next line
     if [ $(adb get-state) != device -a $(adb shell busybox test -e /sbin/recovery 2> /dev/null; echo $?) != 0 ] ; then
         echo "No device is online. Waiting for one..."
@@ -1686,27 +1724,37 @@ function dopush()
     sleep 0.3
     adb remount &> /dev/null
 
-    $func $* | tee .log
+    $func $* | tee $OUT/.log
 
     # Install: <file>
-    LOC=$(cat .log | sed -r 's/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[m|K]//g' | grep 'Install' | cut -d ':' -f 2)
+    LOC=$(cat $OUT/.log | sed -r 's/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[m|K]//g' | grep 'Install' | cut -d ':' -f 2)
 
     # Copy: <file>
-    LOC=$LOC $(cat .log | sed -r 's/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[m|K]//g' | grep 'Copy' | cut -d ':' -f 2)
+    LOC=$LOC $(cat $OUT/.log | sed -r 's/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[m|K]//g' | grep 'Copy' | cut -d ':' -f 2)
 
     for FILE in $LOC; do
         # Get target file name (i.e. system/bin/adb)
-        TARGET=$(echo $FILE | sed "s/\/$PRODUCT\//\n/" | tail -n 1)
+        TARGET=$(echo $FILE | sed "s#$OUT/##")
 
         # Don't send files that are not in /system.
         if ! echo $TARGET | egrep '^system\/' > /dev/null ; then
             continue
         else
+            case $TARGET in
+            system/app/SystemUI.apk|system/framework/*)
+                stop_n_start=true
+            ;;
+            *)
+                stop_n_start=false
+            ;;
+            esac
+            if $stop_n_start ; then adb shell stop ; fi
             echo "Pushing: $TARGET"
             adb push $FILE $TARGET
+            if $stop_n_start ; then adb shell start ; fi
         fi
     done
-    rm -f .log
+    rm -f $OUT/.log
     return 0
 }
 
