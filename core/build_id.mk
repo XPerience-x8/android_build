@@ -23,7 +23,10 @@
 # (like "TC1-RC5").  It must be a single word, and is
 # capitalized by convention.
 #
-BUILD_ID := GINGERBREAD
+PRODUCT_VERSION_MAJOR = 1
+PRODUCT_VERSION_MINOR = 9
+TEST_KLZZ := Release-test
+BUILD_ID := XPerience-$(PRODUCT_VERSION_MAJOR)$(PRODUCT_VERSION_MINOR)-$(TEST_KLZZ)
 
 # DISPLAY_BUILD_NUMBER should only be set for development branches,
 # If set, the BUILD_NUMBER (cl) is appended to the BUILD_ID for
